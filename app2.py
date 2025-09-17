@@ -56,20 +56,86 @@ if df_plot.empty:
 df_plot["NC Net"] = df_plot[COL_NC_L] - df_plot[COL_NC_S]
 df_plot["C Net"]  = df_plot[COL_C_L]  - df_plot[COL_C_S]
 
-# -------------------- KPIs --------------------
+# -------------------- KPIs + Sentimiento --------------------
 st.subheader(f"{sel_market} – {sel_years[0]}–{sel_years[1]}")
-if len(df_plot) >= 2:
-    last = df_plot.iloc[-1]
-    prev = df_plot.iloc[-2]
-    c1, c2 = st.columns(2)
-    c1.metric("NC Net", f"{int(last['NC Net']):,}", int(last["NC Net"] - prev["NC Net"]))
-    c2.metric("C Net",  f"{int(last['C Net']):,}",  int(last["C Net"]  - prev["C Net"]))
-    st.caption(f"Última fecha en el rango: {last[COL_DATE].date():%d/%m/%Y}")
+
+def sentiment_label(pct_change: float) -> tuple[str, str]:
+    """Devuelve (texto, color_hex) según el % de cambio 4 semanas."""
+    if pd.isna(pct_change):
+        return ("Sentimiento Neutral", "#808080")
+    if pct_change >= 30:
+        return ("Sentimiento Alcista", "#0ea65d")
+    if 15 <= pct_change < 30:
+        return ("Sentimiento Medianamente Alcista", "#27ae60")
+    if 5 <= pct_change < 15:
+        return ("Sentimiento Ligeramente Alcista", "#58d68d")
+    if -5 < pct_change < 5:
+        return ("Sentimiento Neutral", "#808080")
+    if -15 < pct_change <= -5:
+        return ("Sentimiento Ligeramente Bajista", "#e67e22")
+    if -30 < pct_change <= -15:
+        return ("Sentimiento Medianamente Bajista", "#d35400")
+    return ("Sentimiento Bajista", "#c0392b")
+
+# Último y cambio vs 4 semanas atrás (aprox. 4 observaciones semanales)
+if len(df_plot) >= 5:
+    last  = df_plot.iloc[-1]
+    prev4 = df_plot.iloc[-5]  # 4 semanas atrás ~ 5º desde el final (incluye la actual al contar índices)
+    nc_delta_abs = last["NC Net"] - prev4["NC Net"]
+    # % respecto al valor previo (evita división por ~0)
+    nc_delta_pct = (nc_delta_abs / max(1.0, abs(prev4["NC Net"]))) * 100.0
 else:
-    st.info("Muy pocos registros en el rango para calcular métricas.")
+    last = df_plot.iloc[-1]
+    nc_delta_abs, nc_delta_pct = np.nan, np.nan
+
+# Fila 1: Netos (con delta semanal) + Tarjeta de sentimiento
+c1, c2, c3 = st.columns([1, 1, 1.2])
+
+with c1:
+    if len(df_plot) >= 2:
+        prev = df_plot.iloc[-2]
+        c1.metric("NC Net", f"{int(last['NC Net']):,}", int(last["NC Net"] - prev["NC Net"]))
+    else:
+        st.metric("NC Net", f"{int(last['NC Net']):,}")
+
+with c2:
+    if len(df_plot) >= 2:
+        prev = df_plot.iloc[-2]
+        c2.metric("C Net", f"{int(last['C Net']):,}", int(last["C Net"] - prev["C Net"]))
+    else:
+        st.metric("C Net", f"{int(last['C Net']):,}")
+
+with c3:
+    text, color = sentiment_label(nc_delta_pct)
+    st.markdown(
+        f"""
+        <div style="
+            padding:14px 18px;
+            border-radius:14px;
+            background:{color}22;
+            border:1px solid {color};
+        ">
+            <div style="font-weight:700; font-size:18px; color:{color};">{text}</div>
+            <div style="color:#555; margin-top:4px;">
+                Cambio 4 semanas (NC Net): 
+                <b>{'—' if pd.isna(nc_delta_abs) else f'{int(nc_delta_abs):,}'}</b> contratos 
+                ({'—' if pd.isna(nc_delta_pct) else f'{nc_delta_pct:.1f}%'}).
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+st.caption(f"Última fecha en el rango: {last[COL_DATE].date():%d/%m/%Y}")
+
+# Fila 2: Totales Long/Short por grupo (último dato)
+c4, c5, c6, c7 = st.columns(4)
+c4.metric("NC Long (último)",  f"{int(last[COL_NC_L]):,}")
+c5.metric("NC Short (último)", f"{int(last[COL_NC_S]):,}")
+c6.metric("C Long (último)",   f"{int(last[COL_C_L]):,}")
+c7.metric("C Short (último)",  f"{int(last[COL_C_S]):,}")
 
 # -------------------- Variación mensual (%) de netos --------------------
-# Resample mensual al fin de mes con el último valor del mes
 df_m = (
     df_plot.set_index(COL_DATE)[["NC Net", "C Net"]]
     .resample("M").last()
@@ -79,7 +145,6 @@ df_m = (
 def pct_change_safe(series: pd.Series) -> pd.Series:
     prev = series.shift(1)
     pct = (series - prev) / prev.abs() * 100.0
-    # si el previo es 0 o NaN, evita divisiones y deja NaN
     pct = pct.mask((prev.abs() < 1e-12) | prev.isna())
     return pct
 
@@ -99,9 +164,9 @@ with tab1:
     st.plotly_chart(fig_nets, use_container_width=True)
 
 with tab2:
-    c1, c2 = st.columns(2)
+    cA, cB = st.columns(2)
 
-    with c1:
+    with cA:
         base_nc = df_m["NC Net %MoM"]
         colors_nc = np.where(base_nc.fillna(0) >= 0, "rgb(0,150,100)", "rgb(200,60,60)")
         fig_nc = go.Figure(go.Bar(x=df_m.index, y=base_nc, marker_color=colors_nc, name="NC Net %MoM"))
@@ -112,7 +177,7 @@ with tab2:
         fig_nc.add_hline(y=0, line_dash="dash", opacity=0.5)
         st.plotly_chart(fig_nc, use_container_width=True)
 
-    with c2:
+    with cB:
         base_c = df_m["C Net %MoM"]
         colors_c = np.where(base_c.fillna(0) >= 0, "rgb(0,150,100)", "rgb(200,60,60)")
         fig_c = go.Figure(go.Bar(x=df_m.index, y=base_c, marker_color=colors_c, name="C Net %MoM"))
