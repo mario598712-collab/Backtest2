@@ -56,85 +56,101 @@ if df_plot.empty:
 df_plot["NC Net"] = df_plot[COL_NC_L] - df_plot[COL_NC_S]
 df_plot["C Net"]  = df_plot[COL_C_L]  - df_plot[COL_C_S]
 
-# -------------------- KPIs + Sentimiento (basado en NONCOMMERCIALS) --------------------
+# -------------------- Utilidades de sentimiento --------------------
+def direction_from_nc(nc_now: float, eps: float = 1e-9) -> tuple[str, str]:
+    """Alcista / Bajista / Neutral (según signo de NC Net) + color."""
+    if nc_now > eps:
+        return "Alcista", "#0ea65d"
+    if nc_now < -eps:
+        return "Bajista", "#c0392b"
+    return "Neutral", "#808080"
+
+# Umbrales para intensidad (puedes ajustarlos si prefieres)
+INT_LOW = 10.0   # <10% -> Bajo
+INT_MED = 25.0   # 10–25% -> Medio
+# >=25% -> Alto
+
+def intensity_from_pct(delta_pct_abs: float | None) -> tuple[str, str]:
+    """Bajo / Medio / Alto por magnitud del % cambio en 4 semanas (abs)."""
+    if delta_pct_abs is None or pd.isna(delta_pct_abs):
+        return "Bajo", "#7f8c8d"  # por defecto
+    if delta_pct_abs < INT_LOW:
+        return "Bajo", "#7f8c8d"
+    if delta_pct_abs < INT_MED:
+        return "Medio", "#f39c12"
+    return "Alto", "#8e44ad"
+
+# -------------------- KPIs + Tarjetas de sentimiento --------------------
 st.subheader(f"{sel_market} – {sel_years[0]}–{sel_years[1]}")
 
-def build_sentiment_from_nc(nc_net_now: float, nc_net_4w: float | None) -> tuple[str, str, float, float]:
-    """
-    Dirección por signo de NC Net actual (Alcista/Bajista/Neutral).
-    Intensidad por |% cambio 4 semanas| de NC Net.
-    Devuelve (label, color_hex, delta_abs, delta_pct).
-    """
-    # delta 4 semanas
-    if nc_net_4w is None or pd.isna(nc_net_4w):
-        delta_abs = np.nan
-        delta_pct = np.nan
-    else:
-        delta_abs = nc_net_now - nc_net_4w
-        denom = max(1.0, abs(nc_net_4w))  # evita división por ~0
-        delta_pct = (delta_abs / denom) * 100.0
-
-    # dirección por signo
-    eps = 1e-9
-    if nc_net_now > eps:
-        base = "Alcista"
-        palette = {"ligera": "#58d68d", "media": "#27ae60", "fuerte": "#0ea65d"}
-    elif nc_net_now < -eps:
-        base = "Bajista"
-        palette = {"ligera": "#e67e22", "media": "#d35400", "fuerte": "#c0392b"}
-    else:
-        return ("Sentimiento Neutral", "#808080", delta_abs, delta_pct)
-
-    mag = abs(delta_pct) if not pd.isna(delta_pct) else 0.0
-    if mag >= 30:
-        label = f"Sentimiento {base}"
-        color = palette["fuerte"]
-    elif 15 <= mag < 30:
-        label = f"Sentimiento Medianamente {base}"
-        color = palette["media"]
-    elif 5 <= mag < 15:
-        label = f"Sentimiento Ligeramente {base}"
-        color = palette["ligera"]
-    else:
-        label = "Sentimiento Neutral"
-        color = "#808080"
-
-    return (label, color, delta_abs, delta_pct)
-
 last = df_plot.iloc[-1]
+if len(df_plot) >= 2:
+    prev = df_plot.iloc[-2]
+else:
+    prev = None
+
+# Cambio 4 semanas para NC Net (aprox. 4 reportes)
 if len(df_plot) >= 5:
-    nc_net_4w = df_plot.iloc[-5]["NC Net"]  # ~4 semanas atrás
+    nc_net_4w = df_plot.iloc[-5]["NC Net"]
+    nc_delta_abs = last["NC Net"] - nc_net_4w
+    denom = max(1.0, abs(nc_net_4w))
+    nc_delta_pct = (nc_delta_abs / denom) * 100.0
 else:
     nc_net_4w = np.nan
+    nc_delta_abs = np.nan
+    nc_delta_pct = np.nan
 
-# Fila 1: Netos + Tarjeta de Sentimiento (NC-based)
-c1, c2, c3 = st.columns([1, 1, 1.2])
+# Fila 1: KPIs Netos y Tarjetas
+c1, c2, c3, c4 = st.columns([1, 1, 1.2, 1.2])
 
 with c1:
-    if len(df_plot) >= 2:
-        prev = df_plot.iloc[-2]
-        c1.metric("NC Net", f"{int(last['NC Net']):,}", int(last["NC Net"] - prev["NC Net"]))
+    if prev is not None:
+        st.metric("NC Net", f"{int(last['NC Net']):,}", int(last["NC Net"] - prev["NC Net"]))
     else:
         st.metric("NC Net", f"{int(last['NC Net']):,}")
 
 with c2:
-    if len(df_plot) >= 2:
-        prev = df_plot.iloc[-2]
-        c2.metric("C Net", f"{int(last['C Net']):,}", int(last["C Net"] - prev["C Net"]))
+    if prev is not None:
+        st.metric("C Net", f"{int(last['C Net']):,}", int(last["C Net"] - prev["C Net"]))
     else:
         st.metric("C Net", f"{int(last['C Net']):,}")
 
+# Tarjeta 1: Dirección (según NC Net)
+dir_label, dir_color = direction_from_nc(last["NC Net"])
 with c3:
-    sentiment_text, sentiment_color, nc_delta_abs, nc_delta_pct = build_sentiment_from_nc(last["NC Net"], nc_net_4w)
     st.markdown(
         f"""
         <div style="
             padding:14px 18px;
             border-radius:14px;
-            background:{sentiment_color}22;
-            border:1px solid {sentiment_color};
+            background:{dir_color}22;
+            border:1px solid {dir_color};
         ">
-            <div style="font-weight:700; font-size:18px; color:{sentiment_color};">{sentiment_text}</div>
+            <div style="font-weight:700; font-size:18px; color:{dir_color};">
+                Dirección: {dir_label}
+            </div>
+            <div style="color:#555; margin-top:4px;">
+                NC Net actual: <b>{int(last['NC Net']):,}</b> contratos.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# Tarjeta 2: Intensidad (según % cambio 4 semanas de NC Net)
+int_label, int_color = intensity_from_pct(abs(nc_delta_pct) if not pd.isna(nc_delta_pct) else None)
+with c4:
+    st.markdown(
+        f"""
+        <div style="
+            padding:14px 18px;
+            border-radius:14px;
+            background:{int_color}22;
+            border:1px solid {int_color};
+        ">
+            <div style="font-weight:700; font-size:18px; color:{int_color};">
+                Intensidad: {int_label}
+            </div>
             <div style="color:#555; margin-top:4px;">
                 Cambio 4 semanas (NC Net): 
                 <b>{'—' if pd.isna(nc_delta_abs) else f'{int(nc_delta_abs):,}'}</b> contratos 
@@ -148,11 +164,11 @@ with c3:
 st.caption(f"Última fecha en el rango: {last[COL_DATE].date():%d/%m/%Y}")
 
 # Fila 2: Totales Long/Short (último dato)
-c4, c5, c6, c7 = st.columns(4)
-c4.metric("NC Long (último)",  f"{int(last[COL_NC_L]):,}")
-c5.metric("NC Short (último)", f"{int(last[COL_NC_S]):,}")
-c6.metric("C Long (último)",   f"{int(last[COL_C_L]):,}")
-c7.metric("C Short (último)",  f"{int(last[COL_C_S]):,}")
+c5, c6, c7, c8 = st.columns(4)
+c5.metric("NC Long (último)",  f"{int(last[COL_NC_L]):,}")
+c6.metric("NC Short (último)", f"{int(last[COL_NC_S]):,}")
+c7.metric("C Long (último)",   f"{int(last[COL_C_L]):,}")
+c8.metric("C Short (último)",  f"{int(last[COL_C_S]):,}")
 
 # -------------------- Variación mensual (%) de netos --------------------
 df_m = (
@@ -162,9 +178,9 @@ df_m = (
 )
 
 def pct_change_safe(series: pd.Series) -> pd.Series:
-    prev = series.shift(1)
-    pct = (series - prev) / prev.abs() * 100.0
-    pct = pct.mask((prev.abs() < 1e-12) | prev.isna())
+    prev_m = series.shift(1)
+    pct = (series - prev_m) / prev_m.abs() * 100.0
+    pct = pct.mask((prev_m.abs() < 1e-12) | prev_m.isna())
     return pct
 
 df_m["NC Net %MoM"] = pct_change_safe(df_m["NC Net"])
