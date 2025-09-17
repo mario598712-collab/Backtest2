@@ -81,17 +81,8 @@ else:
     st.info("Hay muy pocos registros en el rango para calcular variaciones.")
 
 # -------------------- Gráficos --------------------
-tab1, tab2, tab3 = st.tabs(["Largos/Cortos", "Netos", "Tabla"])
+tab1, tab2, tab3 = st.tabs(["Netos")
 
-with tab1:
-    fig1 = px.line(
-        df_plot,
-        x=COL_DATE,
-        y=[COL_NC_L, COL_NC_S, COL_C_L, COL_C_S],
-        labels={"value": "Contratos", "variable": "Serie", COL_DATE: "Fecha"},
-        title="Largos y Cortos – Noncommercial vs Commercial",
-    )
-    st.plotly_chart(fig1, use_container_width=True)
 
 with tab2:
     fig2 = px.line(
@@ -103,13 +94,6 @@ with tab2:
     )
     fig2.add_hline(y=0, line_dash="dash", opacity=0.5)
     st.plotly_chart(fig2, use_container_width=True)
-
-with tab3:
-    st.dataframe(
-        df_plot[[COL_DATE, COL_NC_L, COL_NC_S, "NC Net", COL_C_L, COL_C_S, "C Net"]]
-        .sort_values(COL_DATE),
-        use_container_width=True,
-    )
     st.download_button(
         "⬇️ Descargar CSV filtrado",
         df_plot.to_csv(index=False).encode("utf-8"),
