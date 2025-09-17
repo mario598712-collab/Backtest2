@@ -27,7 +27,6 @@ COL_NC_L   = "Noncommercial Positions-Long (All)"
 COL_NC_S   = "Noncommercial Positions-Short (All)"
 COL_C_L    = "Commercial Positions-Long (All)"
 COL_C_S    = "Commercial Positions-Short (All)"
-COL_OI     = "Open Interest (All)"
 
 need = [COL_MARKET, COL_DATE, COL_NC_L, COL_NC_S, COL_C_L, COL_C_S]
 missing = [c for c in need if c not in df.columns]
@@ -39,46 +38,38 @@ if missing:
 markets = sorted(df[COL_MARKET].dropna().unique().tolist())
 sel_market = st.sidebar.selectbox("🔎 Mercado", markets, index=0)
 
-years = sorted(df[COL_DATE].dt.year.dropna().unique().tolist())
-sel_year = st.sidebar.selectbox("📅 Año", years, index=len(years)-1)
+all_years = sorted(df[COL_DATE].dt.year.dropna().astype(int).unique().tolist())
+y_min, y_max = int(min(all_years)), int(max(all_years))
+default_start = max(y_min, y_max - 1) if y_max > y_min else y_min
+sel_years = st.sidebar.slider("📅 Rango de años", min_value=y_min, max_value=y_max,
+                              value=(default_start, y_max), step=1)
 
-df_plot = df[(df[COL_MARKET] == sel_market) & (df[COL_DATE].dt.year == sel_year)].copy()
+df_plot = df[(df[COL_MARKET] == sel_market) &
+             (df[COL_DATE].dt.year.between(sel_years[0], sel_years[1]))].copy()
 df_plot = df_plot.sort_values(COL_DATE)
 
 if df_plot.empty:
-    st.info("No hay datos para el mercado/año seleccionado.")
+    st.info("No hay datos para el mercado/años seleccionado(s).")
     st.stop()
 
-# -------------------- Derivados (netos y %OI) --------------------
+# -------------------- Derivados (netos) --------------------
 df_plot["NC Net"] = df_plot[COL_NC_L] - df_plot[COL_NC_S]
 df_plot["C Net"]  = df_plot[COL_C_L]  - df_plot[COL_C_S]
 
-if COL_OI in df_plot.columns:
-    with pd.option_context("mode.use_inf_as_na", True):
-        df_plot["NC Net %OI"] = 100 * df_plot["NC Net"] / df_plot[COL_OI]
-        df_plot["C Net %OI"]  = 100 * df_plot["C Net"]  / df_plot[COL_OI]
-else:
-    df_plot["NC Net %OI"] = pd.NA
-    df_plot["C Net %OI"]  = pd.NA
-
 # -------------------- KPIs --------------------
-st.subheader(f"{sel_market} – {sel_year}")
+st.subheader(f"{sel_market} – {sel_years[0]}–{sel_years[1]}")
 if len(df_plot) >= 2:
     last = df_plot.iloc[-1]
     prev = df_plot.iloc[-2]
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     c1.metric("NC Net", f"{int(last['NC Net']):,}", int(last["NC Net"] - prev["NC Net"]))
     c2.metric("C Net",  f"{int(last['C Net']):,}",  int(last["C Net"]  - prev["C Net"]))
-    if pd.notna(last.get("NC Net %OI")):
-        c3.metric("NC Net %OI", f"{last['NC Net %OI']:.2f}%",
-                  None if pd.isna(prev.get('NC Net %OI')) else f"{last['NC Net %OI']-prev['NC Net %OI']:.2f}")
-    else:
-        c3.metric("NC Net %OI", "—")
-    st.caption(f"Última fecha en {sel_year}: {last[COL_DATE].date():%d/%m/%Y}")
+    st.caption(f"Última fecha en el rango: {last[COL_DATE].date():%d/%m/%Y}")
 else:
     st.info("Muy pocos registros en el rango para calcular métricas.")
 
 # -------------------- Variación mensual (%) de netos --------------------
+# Resample mensual al fin de mes con el último valor del mes
 df_m = (
     df_plot.set_index(COL_DATE)[["NC Net", "C Net"]]
     .resample("M").last()
@@ -88,15 +79,12 @@ df_m = (
 def pct_change_safe(series: pd.Series) -> pd.Series:
     prev = series.shift(1)
     pct = (series - prev) / prev.abs() * 100.0
+    # si el previo es 0 o NaN, evita divisiones y deja NaN
     pct = pct.mask((prev.abs() < 1e-12) | prev.isna())
     return pct
 
 df_m["NC Net %MoM"] = pct_change_safe(df_m["NC Net"])
 df_m["C Net %MoM"]  = pct_change_safe(df_m["C Net"])
-
-clip_pct = st.sidebar.slider("Limitar % mensual a ±", min_value=10, max_value=500, value=200, step=10)
-df_m["NC Net %MoM clipped"] = df_m["NC Net %MoM"].clip(lower=-clip_pct, upper=clip_pct)
-df_m["C Net %MoM clipped"]  = df_m["C Net %MoM"].clip(lower=-clip_pct, upper=clip_pct)
 
 # -------------------- Tabs --------------------
 tab1, tab2 = st.tabs(["Netos (C vs NC)", "Variación mensual (%)"])
@@ -105,45 +93,34 @@ with tab1:
     fig_nets = px.line(
         df_plot, x=COL_DATE, y=["NC Net", "C Net"],
         labels={"value": "Contratos (Netos)", "variable": "Serie", COL_DATE: "Fecha"},
-        title=f"Posiciones Netas – Commercial vs Noncommercial ({sel_year})"
+        title=f"Posiciones Netas – Commercial vs Noncommercial ({sel_years[0]}–{sel_years[1]})"
     )
     fig_nets.add_hline(y=0, line_dash="dash", opacity=0.5)
     st.plotly_chart(fig_nets, use_container_width=True)
 
-    if df_plot["NC Net %OI"].notna().any():
-        fig_pct = px.line(
-            df_plot, x=COL_DATE, y=["NC Net %OI", "C Net %OI"],
-            labels={"value": "% del Open Interest", "variable": "Serie", COL_DATE: "Fecha"},
-            title=f"Netos como % del Open Interest ({sel_year})"
-        )
-        fig_pct.add_hline(y=0, line_dash="dash", opacity=0.5)
-        st.plotly_chart(fig_pct, use_container_width=True)
-
 with tab2:
     c1, c2 = st.columns(2)
+
     with c1:
-        y_nc = "NC Net %MoM clipped"
-        colors_nc = np.where(df_m[y_nc] >= 0, "rgb(0,150,100)", "rgb(200,60,60)")
-        fig_nc = go.Figure(go.Bar(x=df_m.index, y=df_m[y_nc], marker_color=colors_nc))
+        base_nc = df_m["NC Net %MoM"]
+        colors_nc = np.where(base_nc.fillna(0) >= 0, "rgb(0,150,100)", "rgb(200,60,60)")
+        fig_nc = go.Figure(go.Bar(x=df_m.index, y=base_nc, marker_color=colors_nc, name="NC Net %MoM"))
         fig_nc.update_layout(
             title="No-Commercial: variación mensual de netos (%)",
-            xaxis_title="Mes", yaxis_title="% mensual", bargap=0.15
+            xaxis_title="Mes", yaxis_title="% mensual", bargap=0.15, showlegend=False
         )
         fig_nc.add_hline(y=0, line_dash="dash", opacity=0.5)
         st.plotly_chart(fig_nc, use_container_width=True)
 
     with c2:
-        y_c = "C Net %MoM clipped"
-        colors_c = np.where(df_m[y_c] >= 0, "rgb(0,150,100)", "rgb(200,60,60)")
-        fig_c = go.Figure(go.Bar(x=df_m.index, y=df_m[y_c], marker_color=colors_c))
+        base_c = df_m["C Net %MoM"]
+        colors_c = np.where(base_c.fillna(0) >= 0, "rgb(0,150,100)", "rgb(200,60,60)")
+        fig_c = go.Figure(go.Bar(x=df_m.index, y=base_c, marker_color=colors_c, name="C Net %MoM"))
         fig_c.update_layout(
             title="Commercial: variación mensual de netos (%)",
-            xaxis_title="Mes", yaxis_title="% mensual", bargap=0.15
+            xaxis_title="Mes", yaxis_title="% mensual", bargap=0.15, showlegend=False
         )
         fig_c.add_hline(y=0, line_dash="dash", opacity=0.5)
         st.plotly_chart(fig_c, use_container_width=True)
 
-    st.caption(
-        f"Nota: % mensual calculado con el último valor de cada mes. "
-        f"Se evita dividir por cero y los cambios extremos se recortan a ±{clip_pct}%."
-    )
+    st.caption("Nota: % mensual calculado con el último valor de cada mes. Si el valor previo es 0 o no existe, el % se deja como NaN para evitar distorsiones.")
