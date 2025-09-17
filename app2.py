@@ -115,7 +115,7 @@ with c2:
     else:
         st.metric("C Net", f"{int(last['C Net']):,}")
 
-# Tarjeta 1: Dirección (según NC Net)
+# Tarjeta 1: Sentimiento (según NC Net)
 dir_label, dir_color = direction_from_nc(last["NC Net"])
 with c3:
     st.markdown(
@@ -127,7 +127,7 @@ with c3:
             border:1px solid {dir_color};
         ">
             <div style="font-weight:700; font-size:18px; color:{dir_color};">
-                Dirección: {dir_label}
+                Sentimiento: {dir_label}
             </div>
             <div style="color:#555; margin-top:4px;">
                 NC Net actual: <b>{int(last['NC Net']):,}</b> contratos.
